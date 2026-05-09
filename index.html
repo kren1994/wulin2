@@ -2155,6 +2155,15 @@
             rebuildColors();
             ensureClockEntry(targetPeerId);
 
+            if (
+                state.status === 'playing'
+                && nextSeat === 'spectator'
+                && (currentSeat === 'black' || currentSeat === 'white')
+            ) {
+                finishGame('', '', i18n('msgAgreedEndLog'));
+                return '';
+            }
+
             if (!bothPlayersReady()) {
                 state.phase = 'waiting-guest';
                 state.status = 'waiting';
