@@ -1983,11 +1983,11 @@
             });
         }
 
-        function getSeatedParticipantByToken(token) {
-            if (!state || !token) return null;
+        function getDisconnectedSeatedParticipantByName(name) {
+            if (!state || !name) return null;
             return Object.values(state.participantsById || {}).find((participant) => {
                 return participant
-                    && participant.token === token
+                    && participant.name === name
                     && participant.disconnectedAt
                     && (participant.seat === 'black' || participant.seat === 'white');
             }) || null;
@@ -2217,7 +2217,9 @@
                     addLog('presence', i18n('msgDisconnected', previousParticipant.name));
                 }
                 suppressedConnectionClosePeers.add(oldPeerId);
-                guestConnections.delete(oldPeerId);
+                if (guestConnections.get(oldPeerId) === oldConnection) {
+                    guestConnections.delete(oldPeerId);
+                }
                 try { oldConnection.close(); } catch (error) { }
             }
             replacePeerIdReferences(oldPeerId, nextPeerId);
@@ -2348,6 +2350,10 @@
                         incoming.on('open', () => incoming.send({ type: 'reject', message: 'Not initialized.' }));
                         incoming.on('open', () => incoming.close());
                         return;
+                    }
+                    const previousConnection = guestConnections.get(incoming.peer);
+                    if (previousConnection && previousConnection !== incoming) {
+                        try { previousConnection.close(); } catch (error) { }
                     }
                     guestConnections.set(incoming.peer, incoming);
                     wireConnectionHandlers(incoming);
@@ -3457,6 +3463,10 @@
                     incoming.on('open', () => incoming.close());
                     return;
                 }
+                const previousConnection = guestConnections.get(incoming.peer);
+                if (previousConnection && previousConnection !== incoming) {
+                    try { previousConnection.close(); } catch (error) { }
+                }
                 guestConnections.set(incoming.peer, incoming);
                 wireConnectionHandlers(incoming);
             });
@@ -3502,10 +3512,9 @@
                 if (message.type === 'hello' && localMode === 'host') {
                     const nextName = sanitizeName(message.name || 'Player');
                     const token = String(message.token || connection.metadata?.token || '');
-                    const reconnectParticipant = getSeatedParticipantByToken(token);
+                    const reconnectParticipant = getDisconnectedSeatedParticipantByName(nextName);
                     const existing = getParticipantById(connection.peer);
-                    const canReconnectByName = Boolean(reconnectParticipant && reconnectParticipant.name === nextName);
-                    if (reconnectParticipant && reconnectParticipant.id !== connection.peer && canReconnectByName) {
+                    if (reconnectParticipant && reconnectParticipant.id !== connection.peer) {
                         reconnectDisconnectedParticipant(reconnectParticipant.id, connection.peer, nextName, token);
                     } else if (!existing) {
                         state.participantsById[connection.peer] = { id: connection.peer, name: nextName, seat: 'spectator', isHost: false, token };
@@ -3594,7 +3603,9 @@
             connection.on('close', () => {
                 setConnectionLabel(i18n('msgRoomClosed'));
                 if (localMode === 'host') {
-                    guestConnections.delete(connection.peer);
+                    if (guestConnections.get(connection.peer) === connection) {
+                        guestConnections.delete(connection.peer);
+                    }
                     if (suppressedConnectionClosePeers.delete(connection.peer)) {
                         return;
                     }
