@@ -1508,7 +1508,10 @@
                 errMatchPausedForDisconnect: '相手の再接続待ちです。',
                 msgWin: (name) => `${name} の勝ちです。`,
                 msgDraw: '引き分けになりました。',
-                msgTimeout: (name) => `${name} が時間切れになりました。`
+                msgTimeout: (name) => `${name} が時間切れになりました。`,
+                msgTimeoutLog: '時間切れです。',
+                msgAgreedEndLog: '終局しました。',
+                msgDrawLog: '満局になりました。'
             },
             zh: {
                 lobbyTitle: '联机对战',
@@ -1617,7 +1620,10 @@
                 errMatchPausedForDisconnect: '正在等待对手重新连接。',
                 msgWin: (name) => `${name} 获胜。`,
                 msgDraw: '和棋。',
-                msgTimeout: (name) => `${name} 超时。`
+                msgTimeout: (name) => `${name} 超时。`,
+                msgTimeoutLog: '超时。',
+                msgAgreedEndLog: '对局结束。',
+                msgDrawLog: '和棋。'
             }
         };
 
@@ -2132,8 +2138,6 @@
             if (currentSeat === nextSeat) return '';
 
             const beforeSeatedIds = [state.seats.black, state.seats.white].filter(Boolean);
-            const affectedActiveSeat = state.status === 'playing' && (currentSeat !== 'spectator' || nextSeat !== 'spectator');
-
             if (currentSeat === 'black') state.seats.black = null;
             if (currentSeat === 'white') state.seats.white = null;
             state.readyByPeerId[targetPeerId] = false;
@@ -2150,11 +2154,6 @@
             participant.seat = nextSeat;
             rebuildColors();
             ensureClockEntry(targetPeerId);
-
-            if (affectedActiveSeat && state.status === 'playing' && state.moves.length > 0) {
-                finishGame('', ''); 
-                return '';
-            }
 
             if (!bothPlayersReady()) {
                 state.phase = 'waiting-guest';
@@ -2251,9 +2250,7 @@
             
             if (reasonText) addLog('system', reasonText);
             
-            if (wasSeated && state.status === 'playing' && state.moves.length > 0) {
-                finishGame('', '');
-            } else if (!bothPlayersReady()) {
+            if (!bothPlayersReady()) {
                 state.phase = 'waiting-guest';
                 state.status = 'waiting';
                 stopClock();
@@ -2694,38 +2691,14 @@
             return '';
         }
 
-        function checkWinAt(x, y, color) {
-            const occupied = new Set(
-                state.moves
-                    .filter((move) => move.color === color)
-                    .map((move) => `${move.x},${move.y}`)
-            );
-            const directions = [
-                [1, 0], [0, 1], [1, 1], [1, -1],
-            ];
-            for (const [dx, dy] of directions) {
-                let count = 1;
-                for (const step of [-1, 1]) {
-                    let nx = x + dx * step;
-                    let ny = y + dy * step;
-                    while (occupied.has(`${nx},${ny}`)) {
-                        count += 1;
-                        nx += dx * step;
-                        ny += dy * step;
-                    }
-                }
-                if (count >= 5) return true;
-            }
-            return false;
-        }
-
-        function finishGame(winnerId, resultText) {
+        function finishGame(winnerId, resultText, logText = '') {
             if (!state) return;
             state.winnerId = winnerId || null;
             state.resultText = resultText;
             state.drawOfferByPeerId = '';
             state.takebackOfferByPeerId = '';
             state.connectionPause = null;
+            if (logText) addLog('system', logText);
             resetReadyFlags();
             setPhase('finished');
             resetReviewMoves();
@@ -2780,11 +2753,6 @@
             const moveNumber = state.moves.length + 1;
             state.moves.push({ x, y, color, peerId, number: moveNumber });
             grantIncrement(peerId);
-
-            if (checkWinAt(x, y, color)) {
-                finishGame(peerId, i18n('msgWin', getPeerName(peerId)));
-                return '';
-            }
 
             switch (state.phase) {
                 case 'opening-move-1': setPhase('swap-after-1', timestamp); break;
@@ -2862,11 +2830,6 @@
             state.moves.push({ x: selected.x, y: selected.y, color: 'black', peerId: blackPeerId, number: moveNumber, offered: true });
             state.opening.offeredMoves = [];
             
-            if (checkWinAt(selected.x, selected.y, 'black')) {
-                finishGame(blackPeerId, i18n('msgWin', getPeerName(blackPeerId)));
-                return '';
-            }
-
             setPhase('opening-move-6-choice2', timestamp);
             return '';
         }
@@ -2897,7 +2860,7 @@
             const opponentPeerId = getOpponentPeerId(peerId);
 
             if (state.drawOfferByPeerId === opponentPeerId) {
-                finishGame('', i18n('msgDraw'));
+                finishGame('', i18n('msgDraw'), i18n('msgDrawLog'));
                 return '';
             }
 
@@ -2913,7 +2876,7 @@
             if (peerId !== opponentPeerId) return i18n('errDrawOnlyOpponentRespond');
 
             if (accept) {
-                finishGame('', i18n('msgDraw'));
+                finishGame('', i18n('msgDraw'), i18n('msgDrawLog'));
                 return '';
             }
 
@@ -2975,7 +2938,7 @@
                 return i18n('errResignPlayerOnly');
             }
             const opponentPeerId = getOpponentPeerId(peerId);
-            finishGame(opponentPeerId, i18n('msgWin', getPeerName(opponentPeerId)));
+            finishGame(opponentPeerId, i18n('msgWin', getPeerName(opponentPeerId)), i18n('msgAgreedEndLog'));
             return '';
         }
 
@@ -4207,7 +4170,7 @@
                     .find((participant) => isParticipantDisconnected(participant) && getDisconnectedRemainingSeconds(participant) <= 0);
                 if (expired) {
                     const winnerId = getOpponentPeerId(expired.id);
-                    finishGame(winnerId, i18n('msgDisconnectTimeout', expired.name));
+                    finishGame(winnerId, i18n('msgDisconnectTimeout', expired.name), i18n('msgAgreedEndLog'));
                     broadcastState();
                     render();
                     return;
@@ -4233,7 +4196,7 @@
                     applyElapsedTime();
                     const loserId = state.clocks.activePeerId;
                     const winnerId = getOpponentPeerId(loserId);
-                    finishGame(winnerId, i18n('msgTimeout', getPeerName(loserId)));
+                    finishGame(winnerId, i18n('msgTimeout', getPeerName(loserId)), i18n('msgTimeoutLog'));
                     broadcastState();
                 } else {
                     const bucket = Math.floor(remaining / 1000);
