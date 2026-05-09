@@ -3,7 +3,8 @@
 
     // Set this to your deployed worker URL in production.
     // Example: 'wss://your-worker-subdomain.workers.dev/ws-peer'
-    const DEFAULT_WORKER_ENDPOINT = '';
+    //const DEFAULT_WORKER_ENDPOINT = '';
+    const DEFAULT_WORKER_ENDPOINT = 'wss://wulin-ws-worker.kamrenju.workers.dev/ws-peer';
 
     const query = new URLSearchParams(window.location.search);
     const fromQuery = String(query.get('wsEndpoint') || '').trim();
