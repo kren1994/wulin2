@@ -137,6 +137,7 @@
             this._socket.addEventListener('close', () => {
                 this.disconnected = true;
                 this._closeAllConnections();
+                this._emitter.emit('close');
             });
 
             this._socket.addEventListener('error', () => {

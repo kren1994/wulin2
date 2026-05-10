@@ -1271,6 +1271,7 @@
         let hasNotifiedHostLeaving = false;
         let hostReconnectTimer = 0;
         let hostTakeoverInProgress = false;
+        let suppressLocalPeerClose = false;
         const suppressedConnectionClosePeers = new Set();
         
         let soundEnabled = true;
@@ -2035,11 +2036,12 @@
             });
         }
 
-        function getSeatedParticipantByName(name) {
+        function getDisconnectedSeatedParticipantByName(name) {
             if (!state || !name) return null;
             return Object.values(state.participantsById || {}).find((participant) => {
                 return participant
                     && participant.name === name
+                    && participant.disconnectedAt
                     && (participant.seat === 'black' || participant.seat === 'white');
             }) || null;
         }
@@ -2352,8 +2354,24 @@
         }
 
         function attemptGuestReconnectToHost() {
-            if (localMode !== 'guest' || !peer || !roomId) return;
+            if (localMode !== 'guest' || !roomId) return;
             if (hostConnection && hostConnection.open) return;
+            if (!peer || peer.disconnected || peer.destroyed) {
+                if (peer) {
+                    try { peer.destroy(); } catch (error) { }
+                }
+                peer = new Peer(undefined, { roomId });
+                peer.on('open', (id) => {
+                    if (localMode !== 'guest') return;
+                    localPeerId = id;
+                    attemptGuestReconnectToHost();
+                });
+                peer.on('error', () => {
+                    if (localMode === 'guest') scheduleGuestReconnect(1200);
+                });
+                attachLocalPeerClose(peer);
+                return;
+            }
             try {
                 hostConnection = peer.connect(roomId, {
                     reliable: true,
@@ -2366,6 +2384,103 @@
             } catch (error) {
                 scheduleGuestReconnect();
             }
+        }
+
+        function becomeGuestAndReconnect(delayMs = 650) {
+            if (peer) {
+                suppressLocalPeerClose = true;
+                try { peer.destroy(); } catch (error) { }
+                peer = null;
+                window.setTimeout(() => { suppressLocalPeerClose = false; }, 0);
+            }
+            localMode = 'guest';
+            localPeerId = '';
+            hostConnection = null;
+            setConnectionLabel(i18n('msgRoomSyncing'));
+            scheduleGuestReconnect(delayMs);
+            render();
+        }
+
+        function attemptHostReconnect() {
+            if (!state || !roomId) return;
+            if (peer) {
+                suppressLocalPeerClose = true;
+                try { peer.destroy(); } catch (error) { }
+                peer = null;
+                window.setTimeout(() => { suppressLocalPeerClose = false; }, 0);
+            }
+            peer = new Peer(roomId);
+            peer.on('open', (id) => {
+                if (!state) return;
+                localMode = 'host';
+                localPeerId = id;
+                setHostPeerId(id);
+                const participant = getParticipantById(id);
+                if (participant) {
+                    delete participant.disconnectedAt;
+                    delete participant.disconnectedUntil;
+                }
+                setConnectionLabel(i18n('msgRoomCreated'));
+                elements.leaveRoomBtn.disabled = false;
+                broadcastState();
+                render();
+            });
+            peer.on('connection', (incoming) => {
+                if (localMode !== 'host') return;
+                if (!state) {
+                    incoming.on('open', () => incoming.send({ type: 'reject', message: 'Not initialized.' }));
+                    incoming.on('open', () => incoming.close());
+                    return;
+                }
+                const previousConnection = guestConnections.get(incoming.peer);
+                if (previousConnection && previousConnection !== incoming) {
+                    try { previousConnection.close(); } catch (error) { }
+                }
+                guestConnections.set(incoming.peer, incoming);
+                wireConnectionHandlers(incoming);
+            });
+            attachLocalPeerClose(peer);
+            peer.on('error', (error) => {
+                if (error.type === 'unavailable-id') {
+                    becomeGuestAndReconnect(650);
+                    return;
+                }
+                if (error.type === 'network') {
+                    showToast(i18n('errCommError'));
+                    window.setTimeout(() => {
+                        if (localMode === 'host') attemptHostReconnect();
+                    }, 1200);
+                    return;
+                }
+                showToast(`Error: ${error.type || error.message}`);
+            });
+        }
+
+        function handleLocalPeerClose() {
+            if (suppressLocalPeerClose) return;
+            if (localMode === 'host' && state) {
+                persistRoomStateSnapshot();
+                hostConnection = null;
+                stopClock();
+                setConnectionLabel(i18n('msgRoomSyncing'));
+                window.setTimeout(() => {
+                    if (localMode === 'host') attemptHostReconnect();
+                }, 650);
+                render();
+                return;
+            }
+            if (localMode === 'guest') {
+                hostConnection = null;
+                scheduleGuestReconnect(1200);
+            }
+        }
+
+        function attachLocalPeerClose(peerInstance) {
+            if (!peerInstance) return;
+            peerInstance.on('close', () => {
+                if (peer !== peerInstance) return;
+                handleLocalPeerClose();
+            });
         }
 
         function scheduleGuestReconnect(delayMs = 650) {
@@ -2414,8 +2529,10 @@
                 hostConnection = null;
             }
             if (peer) {
+                suppressLocalPeerClose = true;
                 try { peer.destroy(); } catch (error) { }
                 peer = null;
+                window.setTimeout(() => { suppressLocalPeerClose = false; }, 0);
             }
             const startHostTakeoverPeer = () => {
                 if (localMode !== 'host') return;
@@ -2429,6 +2546,7 @@
                     broadcastState();
                     render();
                 });
+                attachLocalPeerClose(peer);
                 peer.on('connection', (incoming) => {
                     if (localMode !== 'host') return;
                     if (!state) {
@@ -2445,8 +2563,10 @@
                 });
                 peer.on('error', (error) => {
                     if (error.type === 'unavailable-id') {
+                        suppressLocalPeerClose = true;
                         try { peer.destroy(); } catch (destroyError) { }
                         peer = null;
+                        window.setTimeout(() => { suppressLocalPeerClose = false; }, 0);
                         setConnectionLabel(i18n('msgRoomSyncing'));
                         window.setTimeout(() => {
                             if (localMode === 'host' && hostTakeoverInProgress) {
@@ -2466,8 +2586,8 @@
         function handleGuestHostDisconnect() {
             if (localMode !== 'guest') return;
             if (!state) {
-                showToast(i18n('errConnectionLost'));
-                resetAppState();
+                setConnectionLabel(i18n('msgRoomSyncing'));
+                scheduleGuestReconnect(1200);
                 return;
             }
 
@@ -3460,6 +3580,7 @@
             localPlayerToken = '';
             hasNotifiedHostLeaving = false;
             hostTakeoverInProgress = false;
+            suppressLocalPeerClose = false;
             lastClockBroadcastBucket = null;
         }
 
@@ -3513,6 +3634,7 @@
                 setConnectionLabel(i18n('msgRoomCreated'));
                 render();
             });
+            attachLocalPeerClose(peer);
 
             peer.on('connection', (incoming) => {
                 if (localMode !== 'host') return;
@@ -3540,10 +3662,18 @@
                         hostConnection = peer.connect(roomId, { reliable: true, metadata: { name: hostName, token: localPlayerToken } });
                         wireConnectionHandlers(hostConnection);
                     });
+                    attachLocalPeerClose(peer);
                     peer.on('error', (err) => {
+                        if (err.type === 'network') {
+                            showToast(i18n('errCommError'));
+                            scheduleGuestReconnect(1200);
+                            return;
+                        }
                         showToast(`Error: ${err.type || err.message}`);
                         resetAppState();
                     });
+                } else if (error.type === 'network') {
+                    showToast(i18n('errCommError'));
                 } else {
                     showToast(`Error: ${error.type || error.message}`);
                     resetAppState();
@@ -3570,7 +3700,7 @@
                 if (message.type === 'hello' && localMode === 'host') {
                     const nextName = sanitizeName(message.name || 'Player');
                     const token = String(message.token || connection.metadata?.token || '');
-                    const reconnectParticipant = getSeatedParticipantByName(nextName);
+                    const reconnectParticipant = getDisconnectedSeatedParticipantByName(nextName);
                     const existing = getParticipantById(connection.peer);
                     if (reconnectParticipant && reconnectParticipant.id !== connection.peer) {
                         reconnectDisconnectedParticipant(reconnectParticipant.id, connection.peer, nextName, token);
@@ -3660,8 +3790,8 @@
             });
 
             connection.on('close', () => {
-                setConnectionLabel(i18n('msgRoomClosed'));
                 if (localMode === 'host') {
+                    setConnectionLabel(i18n('msgRoomClosed'));
                     if (guestConnections.get(connection.peer) === connection) {
                         guestConnections.delete(connection.peer);
                     }
@@ -3680,7 +3810,8 @@
                         broadcastState();
                         render();
                     }
-                } else if (localMode === 'guest') {
+                } else if (localMode === 'guest' && connection === hostConnection) {
+                    setConnectionLabel(i18n('msgRoomClosed'));
                     hostConnection = null;
                     handleGuestHostDisconnect();
                 }
