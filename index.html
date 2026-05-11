@@ -1052,6 +1052,7 @@
                                     <button id="menuResignBtn" class="control-menu-item" type="button">終局</button>
                                     <button id="menuDrawBtn" class="control-menu-item" type="button">満局提案</button>
                                     <button id="menuTakebackBtn" class="control-menu-item" type="button">待った</button>
+                                    <button id="menuKifuCopyBtn" class="control-menu-item" type="button" hidden>棋譜コピー</button>
                                 </div>
                             </div>
                         </div>
@@ -1231,6 +1232,7 @@
             menuDrawBtn: document.getElementById('menuDrawBtn'),
             menuResignBtn: document.getElementById('menuResignBtn'),
             menuTakebackBtn: document.getElementById('menuTakebackBtn'),
+            menuKifuCopyBtn: document.getElementById('menuKifuCopyBtn'),
             toast: document.getElementById('toast'),
             
             uiLobbyTitle: document.getElementById('uiLobbyTitle'),
@@ -1421,6 +1423,7 @@
                 spectatorEmpty: 'まだ部屋に参加者はいません。',
                 spectatorNone: '観戦者はいません。',
                 menuTakeback: '待った',
+                menuKifuCopy: '棋譜コピー',
                 menuDraw: '満局提案',
                 menuResign: '終局',
                 menuLang: '言語',
@@ -1502,6 +1505,8 @@
                 chatNoMessages: 'チャットはまだありません。',
                 msgDrawOffered: '満局提案しました。',
                 msgTakebackRequested: '待った申請しました。',
+                msgRenjuPortalCopied: 'RenjuPortal の棋譜リンクをコピーしました',
+                errCopyFailed: '棋譜リンクをコピーできませんでした。',
                 msgJoined: (name) => `${name} が入室しました。`,
                 msgLeft: (name) => `${name} が退室しました。`,
                 msgDisconnected: (name) => `${name} の接続が切れました。復帰を待っています。`,
@@ -1533,6 +1538,7 @@
                 spectatorEmpty: '房间里还没有人。',
                 spectatorNone: '没有观战者。',
                 menuTakeback: '悔棋',
+                menuKifuCopy: '复制棋谱链接',
                 menuDraw: '提和',
                 menuResign: '终局',
                 menuLang: '语言',
@@ -1614,6 +1620,8 @@
                 chatNoMessages: '还没有聊天记录。',
                 msgDrawOffered: '已提出和棋。',
                 msgTakebackRequested: '已申请悔棋。',
+                msgRenjuPortalCopied: '已复制 RenjuPortal 棋谱链接。',
+                errCopyFailed: '无法复制棋谱链接。',
                 msgJoined: (name) => `${name} 进入了房间。`,
                 msgLeft: (name) => `${name} 退出了房间。`,
                 msgDisconnected: (name) => `${name} 的连接已断开，正在等待重连。`,
@@ -1659,6 +1667,7 @@
             elements.menuDrawBtn.textContent = i18n('menuDraw');
             elements.menuResignBtn.textContent = i18n('menuResign');
             elements.menuTakebackBtn.textContent = i18n('menuTakeback');
+            elements.menuKifuCopyBtn.textContent = i18n('menuKifuCopy');
             document.getElementById('langBtn').childNodes[0].nodeValue = i18n('menuLang');
             document.getElementById('soundBtn').childNodes[0].nodeValue = i18n('menuSound');
             document.getElementById('coordsBtn').textContent = i18n('menuCoords');
@@ -1769,6 +1778,39 @@
             toastTimer = window.setTimeout(() => {
                 elements.toast.classList.remove('show');
             }, 2600);
+        }
+
+        function encodeRenjuPortalCoordinate(value) {
+            return value.toString(16);
+        }
+
+        function buildRenjuPortalKifuUrl(moves) {
+            const mvs = (moves || []).map((move) => `${encodeRenjuPortalCoordinate(move.x)}${encodeRenjuPortalCoordinate(move.y)}`).join('');
+            return `https://renjuportal.com/board?v=3&typ=g&mde=e&mvs=${mvs}`;
+        }
+
+        async function copyTextToClipboard(text) {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', 'readonly');
+            textarea.style.position = 'fixed';
+            textarea.style.top = '-9999px';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            textarea.setSelectionRange(0, textarea.value.length);
+
+            try {
+                const copied = document.execCommand('copy');
+                if (!copied) throw new Error('copy failed');
+            } finally {
+                document.body.removeChild(textarea);
+            }
         }
 
         function buildSettings() {
@@ -4274,10 +4316,13 @@
         function renderControls() {
             const localParticipant = getParticipantById(localPeerId);
             const canManageResult = Boolean(state && state.status === 'playing' && !hasDisconnectedSeatedPlayer() && localParticipant && (localParticipant.seat === 'black' || localParticipant.seat === 'white'));
+            const canCopyKifu = Boolean(state && state.status === 'finished');
             
             elements.menuDrawBtn.disabled = !canManageResult || Boolean(state?.drawOfferByPeerId);
             elements.menuResignBtn.disabled = !canManageResult;
             elements.menuTakebackBtn.disabled = !canManageResult || Boolean(state?.takebackOfferByPeerId);
+            elements.menuKifuCopyBtn.hidden = !canCopyKifu;
+            elements.menuKifuCopyBtn.disabled = !canCopyKifu;
         }
 
         function renderActionDialog() {
@@ -4490,6 +4535,18 @@
             sendAction({ kind: 'takeback' });
         }
 
+        async function copyKifuFromMenu() {
+            closeControlMenus();
+            if (!state || state.status !== 'finished') return;
+
+            try {
+                await copyTextToClipboard(buildRenjuPortalKifuUrl(state.moves || []));
+                showToast(i18n('msgRenjuPortalCopied'));
+            } catch (_error) {
+                showToast(i18n('errCopyFailed'));
+            }
+        }
+
         function resignFromMenu() {
             closeControlMenus();
             openResignConfirm();
@@ -4608,6 +4665,7 @@
         bindPointerPress(elements.menuResignBtn, resignFromMenu);
         bindPointerPress(elements.menuDrawBtn, offerDrawFromMenu);
         bindPointerPress(elements.menuTakebackBtn, requestTakebackFromMenu);
+        bindPointerPress(elements.menuKifuCopyBtn, copyKifuFromMenu);
         bindPointerPress(document.getElementById('langBtn'), cycleLanguage);
         bindPointerPress(document.getElementById('soundBtn'), toggleSound);
         bindPointerPress(document.getElementById('coordsBtn'), toggleCoords);
