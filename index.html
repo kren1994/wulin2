@@ -1284,6 +1284,7 @@
         let stoneSoundBuffer = null;
         let stoneSoundBufferPromise = null;
         let stoneSoundPool = [];
+        let audioResumePromise = null;
         let lastReportedSec = null;
 
         function initAudio() {
@@ -1294,8 +1295,15 @@
                 }
             }
             if (audioCtx && audioCtx.state === 'suspended') {
-                audioCtx.resume();
+                if (!audioResumePromise) {
+                    audioResumePromise = audioCtx.resume()
+                        .catch(() => {})
+                        .finally(() => {
+                            audioResumePromise = null;
+                        });
+                }
             }
+            return audioCtx;
         }
 
         function initStoneSound() {
@@ -1307,7 +1315,7 @@
 
         function createStoneAudioElement() {
             const sound = new Audio(STONE_SOUND_SRC);
-            sound.preload = 'none';
+            sound.preload = 'auto';
             return sound;
         }
 
@@ -1338,9 +1346,19 @@
                 });
         }
 
-        document.body.addEventListener('pointerdown', () => {
-            if (soundEnabled) initAudio();
-        }, { once: true, capture: true });
+        function primeAudioFromUserGesture() {
+            if (!soundEnabled) return;
+            initAudio();
+            ensureStoneSoundBuffer();
+            initStoneSound();
+            stoneSoundPool.forEach((sound) => {
+                try { sound.load(); } catch (error) {}
+            });
+        }
+
+        ['pointerdown', 'click', 'keydown', 'touchend'].forEach((eventName) => {
+            document.body.addEventListener(eventName, primeAudioFromUserGesture, { capture: true, passive: true });
+        });
 
         function playStoneSoundBuffer() {
             if (!audioCtx || !stoneSoundBuffer || audioCtx.state !== 'running') return false;
