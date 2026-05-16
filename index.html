@@ -2295,6 +2295,8 @@
             participant.seat = nextSeat;
             rebuildColors();
             ensureClockEntry(targetPeerId);
+            const afterSeatedIds = [state.seats.black, state.seats.white].filter(Boolean);
+            const seatingChanged = beforeSeatedIds.join(':') !== afterSeatedIds.join(':');
 
             if (
                 state.status === 'playing'
@@ -2305,6 +2307,11 @@
                 return '';
             }
 
+            if (state.status === 'finished') {
+                if (seatingChanged) resetReadyFlags();
+                return '';
+            }
+
             if (!bothPlayersReady()) {
                 state.phase = 'waiting-guest';
                 state.status = 'waiting';
@@ -2312,8 +2319,6 @@
                 return '';
             }
 
-            const afterSeatedIds = [state.seats.black, state.seats.white].filter(Boolean);
-            const seatingChanged = beforeSeatedIds.join(':') !== afterSeatedIds.join(':');
             if (seatingChanged) {
                 resetReadyFlags();
                 state.phase = 'waiting-guest';
@@ -2400,6 +2405,11 @@
             
             if (reasonText) addLog('system', reasonText);
             
+            if (state.status === 'finished') {
+                if (wasSeated) resetReadyFlags();
+                return;
+            }
+
             if (!bothPlayersReady()) {
                 state.phase = 'waiting-guest';
                 state.status = 'waiting';
